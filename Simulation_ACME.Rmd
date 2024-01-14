@@ -1,0 +1,320 @@
+---
+title: "Casual mediation effect"
+author: "Chengyun Li"
+date: "2023-10-23"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Function for simulation
+```{r function for simulation}
+# Create the function to simulate dataset 
+# N study participants
+# Treatment (T) is binary variable ~ Bernoulli(p = 0.5)
+# Mediator (M) M = alpha2 + beta2*T + e2, e2~N(0, v_e2)
+# Outcome(Y) Y = alpha3 + beta3*T + gamma*M + kappa*T*M + e3, e3~N(0, v_e3)
+simulate <- function(N, p, v_e2, v_e3, a2, b2, a3, b3, gam, kap){
+  # Simulate binary treatment(T) from Bernoulli(p)
+  T_i = rbinom(N, 1, p)
+
+  # Simulate errors of mediator from N(0,v_e2)
+  e_i2 = rnorm(N, mean=0, sd=sqrt(v_e2))
+  
+  # Simulate errors of outcome from N(0,v_e3)
+  e_i3 = rnorm(N, mean=0, sd=sqrt(v_e3))
+  
+  # Generate ID 
+  id = c(1:N)
+  
+  # Simulate mediator from a linear structural equation model
+  M_i = a2 + b2*T_i + e_i2
+  
+  # Simulate mediator from a linear structural equation model
+  Y_i = a3 + b3*T_i + gam*M_i + kap*T_i*M_i + e_i3
+
+  # Return data frame
+  data.frame(id=id, Treatment = T_i, Mediator = M_i, Outcome = Y_i)
+}
+```
+
+## LSEM ACME function
+```{r}
+ACME.LSEM <- function(outcome="outcome", treatment="treatment", mediator="mediator", interaction = FALSE, dat){
+  ## Get outcome, treatment, mediator from the input data, vector
+  Y <- dat[, outcome]
+  M <- dat[, mediator]
+  Trt <- dat[, treatment]
+  if(!interaction){
+    ## if the interaction input is FALSE as default, LSEM is performed without interaction terms.
+    m.fit <- lm(M~Trt)
+    y.fit_m <- lm(Y~Trt + M)
+    y.fit <- lm(Y~Trt)
+    total_effect <- coef(y.fit)["Trt"]
+    direct_effect <- coef(y.fit_m)["M"]
+    ## Difference
+    indirect_effect <- total_effect - direct_effect
+    ACME_T0 <- indirect_effect
+    ACME_T1 <- indirect_effect
+  }else{
+    ## if the input of interaction is TRUE, LSEM with interaction term between treatment and mediator. 
+    m.fit <- lm(M~Trt)
+    y.fit_m <- lm(Y~Trt*M)
+    y.fit <- lm(Y~Trt)
+    ## Product
+    ACME_T0 <- coef(m.fit)["Trt"] * coef(y.fit_m)["M"]
+    ACME_T1 <- coef(m.fit)["Trt"] *(coef(y.fit_m)["M"] + coef(y.fit_m)["Trt:M"])
+  }
+  ##
+  ACME <-data.frame(ACME_T0=ACME_T0, ACME_T1=ACME_T1)
+  return(ACME)
+}
+```
+
+## nonparametric ACME function (18)
+```{r}
+ACME.nonpar <- function(outcome="outcome", treatment="treatment", mediator="mediator", dat, J=10){
+  Y <- dat[, outcome]
+  M <- dat[, mediator]
+  Trt <- dat[, treatment]
+  n0 <-  table(Trt)[1]
+  n1 <- table(Trt)[2]
+  M_breaks <- quantile(M, probs = seq(0, 1, length.out = J + 1), na.rm = TRUE)
+  M_factor <- cut(M, M_breaks, include.lowest = TRUE, labels = FALSE)
+  M_counts <- table(M_factor)
+  ###
+  sum_Y0 <- tapply(Y[which(Trt==0)], M_factor[which(Trt==0)], sum)
+  sum_Y1 <- tapply(Y[which(Trt==1)], M_factor[which(Trt==1)], sum)
+  ###
+  counts_T0 <- tapply(M, M_factor, function(x) sum(Trt[M %in% x] == 0))
+  counts_T0_n0 <- counts_T0[counts_T0 != 0]
+  counts_T1 <- tapply(M, M_factor, function(x) sum(Trt[M %in% x] == 1))
+  counts_T1_n0 <- counts_T1[counts_T1 != 0]
+  ACME_non_T0 <- sum(sum_Y0/counts_T0_n0 *((counts_T1/n1 - counts_T0/n0)[counts_T0 != 0]))
+  ACME_non_T1 <- sum(sum_Y1/counts_T1_n0 *((counts_T1/n1 - counts_T0/n0)[counts_T1 != 0]))
+  ACME_none <- c(ACME_non_T0, ACME_non_T1)
+  return(ACME_none)
+}
+```
+
+```{r}
+ACME.nonpar(outcome="Outcome", treatment="Treatment", mediator="Mediator", dat=dat)
+ACME.LSEM(outcome="Outcome", treatment="Treatment", mediator="Mediator", dat=dat)
+```
+
+```{r}
+library(mediation)
+med.fit <- lm(Mediator~Treat, data=dat)
+out.fit <- lm(Outcome~Mediator*Treat, data=dat)
+mediation.re <- mediate(med.fit, out.fit, treat="Treat", mediator="Mediator", sims=200)
+summary(mediation.re)
+```
+
+```{r}
+#number of simulations （200）
+nsim=200
+#sample size
+sampleSize <- c(300, 500)
+```
+
+```{r}
+v_e2=1
+v_e3=1
+a2=0.5
+b2=0.5
+a3=0.8
+b3=0.8
+gam=2
+#without T/M interaction
+kap=1
+p=0.5
+set.seed(1234)
+dat <- simulate(N=size, p=p, v_e2=v_e2, v_e3=v_e3, a2=a2, b2=b2, a3=a3, b3=b3, gam=gam, kap=kap)
+# Perform the simulation
+for(size in sampleSize){
+   ACME_1 <- c()
+   ACME_0 <- c()
+   ACME_non_1 <- c()
+   ACME_non_0 <- c()
+  for(i in 1:nsim){
+    #Data simulation 
+    datsim <- simulate(N=size, p=p, v_e2=v_e2, v_e3=v_e3, a2=a2, b2=b2, a3=a3, b3=b3, gam=gam, kap=kap)
+    if(kap!=0){
+      interaction = TRUE
+    }else{
+      interaction = FALSE
+    }
+    ACME_p <-ACME.LSEM(outcome="Outcome", treatment="Treat", mediator="Mediator", interaction = interaction, dat=datsim)
+    ACME_0 <- c(ACME_0, ACME_p$ACME_T0)
+    ACME_1 <- c(ACME_1, ACME_p$ACME_T1)
+    
+    #nonparametric estimation
+    ACME_non <- ACME.nonpar(outcome="Outcome", treatment="Treat", mediator="Mediator", dat=datsim)
+    ACME_non_0 <- c(ACME_non_0, ACME_non[1])
+    ACME_non_1 <- c(ACME_non_1, ACME_non[2])
+  }
+  assign(paste0("ACME_0_", size), mean(ACME_0))
+  assign(paste0("ACME_1_", size), mean(ACME_1))
+  assign(paste0("ACME_non_0_", size), mean(ACME_non_0))
+  assign(paste0("ACME_non_1_", size), mean(ACME_non_1))
+}
+
+ACME_0_300
+ACME_0_500
+ACME_non_0_300
+ACME_non_0_500
+
+ACME_1_300
+ACME_1_500
+ACME_non_1_300
+ACME_non_1_500
+
+
+```
+
+
+```{r}
+ACME_true <- b2*gam
+ACME_50_bias <- ACME_50 - ACME_true
+ACME_100_bias <- ACME_100 - ACME_true
+ACME_500_bias <- ACME_500 - ACME_true
+ACME_2000_bias <- ACME_2000 - ACME_true
+
+ACME_non_50_bias <- ACME_non_50 - ACME_true
+ACME_non_100_bias <- ACME_non_100 - ACME_true
+ACME_non_500_bias <- ACME_non_500 - ACME_true
+ACME_non_2000_bias <- ACME_non_2000 - ACME_true
+
+para_ACME <- c(ACME_50, ACME_100, ACME_500, ACME_2000)
+para_ACME_bias <- c(ACME_50_bias, ACME_100_bias, ACME_500_bias, ACME_2000_bias)
+nonpara_ACME <- c(ACME_non_50, ACME_non_100, ACME_non_500, ACME_non_2000)
+nonpara_ACME_bias <- c(ACME_non_50_bias, ACME_non_100_bias, ACME_non_500_bias, ACME_non_2000_bias)
+
+data.frame(sampleSize, para_ACME, para_ACME_bias, nonpara_ACME, nonpara_ACME_bias)
+```
+
+
+```{r}
+v_e2=1
+v_e3=1
+a2=0.5
+b2=0.5
+a3=0.8
+b3=0.8
+gam=1.2
+#with T/M interaction
+kap=1
+p=0.5
+set.seed(12345)
+# Perform the simulation
+for(size in sampleSize){
+  for(i in 1:nsim){
+    #Data simulation 
+    data <- simulate(N=size, p=p, v_e2=v_e2, v_e3=v_e3, a2=a2, b2=b2, a3=a3, b3=b3, gam=gam, kap=kap)
+    
+    #linear structural equation model, parametric estimation
+    fit_m <- lm(M_i~T_i, data=data)
+    b_2 <- fit_m$coefficients[[2]]
+    if(i==1){
+      beta2 <- b_2
+    } else {
+      beta2 <- c(beta2, b_2)
+    }
+    assign(paste0("beta2_", size), beta2)
+    fit_y <- lm(Y_i~T_i+M_i+T_i*M_i, data=data)
+    g <- fit_y$coefficients[[3]]
+    k <- fit_y$coefficients[[4]]
+    if(i==1){
+      gamma <- g
+      kappa <- k
+    } else {
+      gamma <- c(gamma, g)
+      kappa <- c(kappa, k)
+    }
+    ACME_0 <- beta2*gamma
+    ACME_1 <- beta2*(gamma+kappa)
+    assign(paste0("beta2_", size), beta2)
+    assign(paste0("gamma_", size), gamma)
+    assign(paste0("ACME_0_", size), mean(ACME_0))
+    assign(paste0("ACME_1_", size), mean(ACME_1))
+    
+    #nonparametric estimation
+    J <- 10
+    n0 <- table(data$T_i)[[1]]
+    n1 <- table(data$T_i)[[2]]
+    M_breaks <- quantile(data$M_i, probs = seq(0, 1, length.out = J + 1), na.rm = TRUE)
+    M_factor <- cut(data$M_i, M_breaks, include.lowest = TRUE, labels = FALSE)
+    M_counts_0 <- tapply(data$M_i, M_factor, function(x) sum(data$T_i[data$M_i %in% x] == 0))
+    M_counts_1 <- tapply(data$M_i, M_factor, function(x) sum(data$T_i[data$M_i %in% x] == 1))
+    sum_Y_0 <- sapply(1:J, function(i) {
+      if (sum(data$T_i[M_factor == i] == 0) > 0) {
+        sum(data$Y_i[M_factor == i & data$T_i == 0])
+        } else {
+          0 }
+      })
+    sum_Y_1 <- sapply(1:J, function(i) {
+      if (sum(data$T_i[M_factor == i] == 1) > 0) {
+        sum(data$Y_i[M_factor == i & data$T_i == 1])
+        } else {
+          0 }
+      })
+    counts_T0 <- tapply(data$M_i, M_factor, function(x) sum(data$T_i[data$M_i %in% x] == 0))
+    counts_T1 <- tapply(data$M_i, M_factor, function(x) sum(data$T_i[data$M_i %in% x] == 1))
+    ACME_non_0 <- sum(sum_Y_0/M_counts_0 *(counts_T1/n1 - counts_T0/n0), na.rm = TRUE)
+    ACME_non_1 <- sum(sum_Y_1/M_counts_1 *(counts_T1/n1 - counts_T0/n0), na.rm = TRUE)
+    if(i==1){
+      ACME_c_0 <- ACME_non_0
+      ACME_c_1 <- ACME_non_1
+      } else {
+      ACME_c_0 <- c(ACME_c_0, ACME_non_0)
+      ACME_c_1 <- c(ACME_c_1, ACME_non_1)
+    }
+    assign(paste0("ACME_non_0_", size), mean(ACME_c_0))
+    assign(paste0("ACME_non_1_", size), mean(ACME_c_1))
+  }
+}
+```
+
+```{r}
+ACME_true_0 <- b2*gam
+ACME_true_1 <- b2*(gam+kap)
+
+ACME_0_50_bias <- ACME_0_50 - ACME_true_0 
+ACME_0_100_bias <- ACME_0_100 - ACME_true_0 
+ACME_0_500_bias <- ACME_0_500 - ACME_true_0 
+ACME_0_2000_bias <- ACME_0_2000 - ACME_true_0 
+
+ACME_non_0_50_bias <- ACME_non_0_50 - ACME_true_0 
+ACME_non_0_100_bias <- ACME_non_0_100 - ACME_true_0 
+ACME_non_0_500_bias <- ACME_non_0_500 - ACME_true_0 
+ACME_non_0_2000_bias <- ACME_non_0_2000 - ACME_true_0 
+
+para_ACME0 <- c(ACME_0_50, ACME_0_100, ACME_0_500, ACME_0_2000)
+para_ACME0_bias <- c(ACME_0_50_bias, ACME_0_100_bias, ACME_0_500_bias, ACME_0_2000_bias)
+nonpara_ACME0 <- c(ACME_non_0_50, ACME_non_0_100, ACME_non_0_500, ACME_non_0_2000)
+nonpara_ACME0_bias <- c(ACME_non_0_50_bias, ACME_non_0_100_bias, ACME_non_0_500_bias, ACME_non_0_2000_bias)
+
+data.frame(sampleSize, para_ACME0, para_ACME0_bias, nonpara_ACME0, nonpara_ACME0_bias)
+
+ACME_1_50_bias <- ACME_1_50 - ACME_true_1
+ACME_1_100_bias <- ACME_1_100 - ACME_true_1
+ACME_1_500_bias <- ACME_1_500 - ACME_true_1 
+ACME_1_2000_bias <- ACME_1_2000 - ACME_true_1
+
+ACME_non_1_50_bias <- ACME_non_1_50 - ACME_true_1 
+ACME_non_1_100_bias <- ACME_non_1_100 - ACME_true_1 
+ACME_non_1_500_bias <- ACME_non_1_500 - ACME_true_1 
+ACME_non_1_2000_bias <- ACME_non_1_2000 - ACME_true_1
+
+para_ACME1 <- c(ACME_1_50, ACME_1_100, ACME_1_500, ACME_1_2000)
+para_ACME1_bias <- c(ACME_1_50_bias, ACME_1_100_bias, ACME_1_500_bias, ACME_1_2000_bias)
+nonpara_ACME1 <- c(ACME_non_1_50, ACME_non_1_100, ACME_non_1_500, ACME_non_1_2000)
+nonpara_ACME1_bias <- c(ACME_non_1_50_bias, ACME_non_1_100_bias, ACME_non_1_500_bias, ACME_non_1_2000_bias)
+
+data.frame(sampleSize, para_ACME1, para_ACME1_bias, nonpara_ACME1, nonpara_ACME1_bias)
+
+```
+
+

@@ -1,0 +1,75 @@
+---
+title: "CMA1"
+author: "Chengyun Li"
+date: "2023-05-29"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r framing data}
+library("mediation")
+set.seed(2023)
+data("framing", package = "mediation")
+```
+
+```{r mediator model}
+#mediator model: the measure of anxiety (emo) is modeled as a function of the framing 
+#treatment (treat) and pre-treatment covariates (age, educ, gender, and income).
+med.fit <- lm(emo ~ treat + age + educ + gender + income, data = framing)
+```
+
+```{r outcome model}
+#outcome model: which is a binary variable indicating whether or not the participant 
+#agreed to send a letter about immigration policy to his or her member of 
+#Congress (cong_mesg). 
+#The explanatory variables of the outcome model include the mediator, 
+#treatment status, and the same set of pre-treatment variables as those used in 
+#the mediator model.
+out.fit <- glm(cong_mesg ~ emo + treat + age + educ + gender + income, data = framing, 
+               family = binomial("probit"))
+```
+
+The default simulation type is the quasi-Bayesian Monte Carlo method based on normal approximation
+
+```{r estimate the ACME and ADE}
+#specify the model fits: med.fit and out.fit.
+#specify names of the treatment (treat) and mediating variables (mediator).
+#use White’s heteroskedasticity-consistent estimator for the covariance matrix 
+#from the sandwich package by setting the robustSE argument to TRUE
+med.out <- mediate(med.fit, out.fit, treat = "treat", mediator = "emo", 
+                   robustSE = TRUE, sims = 100)
+summary(med.out)
+```
+
+The estimated ACMEs are statistically significantly different from zero but the estimated average direct and total effects are not. The results suggest that the treatment in the framing experiment may have increased emotional response, which in turn made subjects more likely to send a message to his or her member of Congress.
+
+Using nonparametric bootstrap rather than the quasi-Bayesian Monte Carlo simulation for variance estimation via the boot = TRUE argument.
+
+```{r}
+med.out <- mediate(med.fit, out.fit, boot = TRUE, treat = "treat",
+                   mediator = "emo", sims = 100)
+summary(med.out)
+```
+Treatment and mediator interaction
+```{r, Treatment and mediator interaction}
+#It is possible that the ACME takes different values depending 
+#on the baseline treatment status.
+med.fit <- lm(emo ~ treat + age + educ + gender + income, data=framing)
+out.fit <- glm(cong_mesg ~ emo * treat + age + educ + gender + income,
+               data = framing, family = binomial("probit"))
+med.out <- mediate(med.fit, out.fit, treat = "treat", mediator = "emo",
+                   robustSE = TRUE, sims = 100)
+summary(med.out)
+```
+
+The statistical significance of the treatment-mediator interaction can be tested via the test.TMint function in the following manner.
+
+```{r, treatment-mediator interaction}
+test.TMint(med.out, conf.level = .95)
+```
+
+
+
